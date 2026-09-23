@@ -21,7 +21,8 @@ Requires n8n 1.x. The package has no runtime dependencies.
 [Labelixa panel](https://labelixa.com/panel) and the API address
 (`https://api.labelixa.com`, or your own instance). Leave the key empty
 for the free tier: rate limited per IP, no watermark. The header is only
-sent when the field is filled.
+sent when the field is filled. **Test** checks the key against the API: a
+wrong key fails (401), an empty key passes as the free tier.
 
 ## Operations
 

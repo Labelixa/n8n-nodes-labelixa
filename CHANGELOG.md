@@ -11,6 +11,8 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
   Convert to EPL, Detect Language, Check Printer Compatibility) and the
   Barcode resource (Generate as SVG or PNG), each mapping to one
   documented REST endpoint.
+- Credential test (`GET /v1/capabilities`): a wrong key fails with 401,
+  an empty key passes as the free tier.
 - `Labelixa API` credential with an optional `lbx_` key (the free tier
   needs none) and a configurable base URL for on-premise deployments.
 - Quota answers (402/429) surface as one sentence with the server's

@@ -1,4 +1,4 @@
-import type { ICredentialType, INodeProperties } from 'n8n-workflow';
+import type { ICredentialTestRequest, ICredentialType, INodeProperties } from 'n8n-workflow';
 
 /**
  * Labelixa credential: an optional `lbx_` key and the API address.
@@ -9,10 +9,10 @@ import type { ICredentialType, INodeProperties } from 'n8n-workflow';
  * only when the field is filled, so an empty credential sends no header at
  * all rather than an empty one.
  *
- * No credential test: the API treats an unknown key as anonymous rather
- * than rejecting it, so a test request cannot tell a typo from a valid
- * key. Usage on the free plan showing up in the Labelixa panel is the
- * signal that a key is wrong.
+ * The credential test calls GET /v1/capabilities with the key: the API
+ * rejects an unknown key with 401, serves a valid key with 200, and treats
+ * an empty header as anonymous (200) — so an empty credential also passes,
+ * which is the free tier working as designed.
  */
 export class LabelixaApi implements ICredentialType {
 	name = 'labelixaApi';
@@ -20,6 +20,14 @@ export class LabelixaApi implements ICredentialType {
 	displayName = 'Labelixa API';
 
 	documentationUrl = 'https://labelixa.com/docs/api';
+
+	test: ICredentialTestRequest = {
+		request: {
+			baseURL: '={{$credentials.baseUrl}}',
+			url: '/v1/capabilities',
+			headers: { 'X-API-Key': '={{$credentials.apiKey}}' },
+		},
+	};
 
 	properties: INodeProperties[] = [
 		{
