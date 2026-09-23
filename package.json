@@ -1,0 +1,61 @@
+{
+  "name": "n8n-nodes-labelixa",
+  "version": "0.1.0",
+  "description": "n8n community node for Labelixa: render, validate and convert ZPL, EPL, TSPL and CPCL label code, and generate barcodes, without a printer.",
+  "keywords": [
+    "n8n-community-node-package",
+    "zpl",
+    "zebra",
+    "label",
+    "barcode",
+    "epl",
+    "tspl",
+    "cpcl",
+    "thermal-printer"
+  ],
+  "license": "MIT",
+  "homepage": "https://labelixa.com",
+  "author": {
+    "name": "Labelixa",
+    "email": "support@labelixa.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Labelixa/n8n-nodes-labelixa.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Labelixa/n8n-nodes-labelixa/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc && node scripts/copy-icons.mjs",
+    "test": "npm run build && node --test test/node.test.mjs",
+    "check-publish": "node scripts/check-publish.mjs",
+    "prepublishOnly": "npm run build && node scripts/check-publish.mjs && node --test test/node.test.mjs"
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/LabelixaApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/Labelixa/Labelixa.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "n8n-workflow": "^1.0.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}
