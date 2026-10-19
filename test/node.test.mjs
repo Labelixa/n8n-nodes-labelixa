@@ -83,6 +83,33 @@ test("render uses the Labelary-shaped path with headers, key and raw body", asyn
   assert.equal(items[0].json.warnings, "");
 });
 
+test("every binary request names the media type it expects in Accept", async () => {
+  // n8n's HTTP helper defaults to Accept: application/json; the ZPL endpoint
+  // then answers with the label's field list as JSON instead of the image.
+  const cases = [
+    [{ resource: "label", operation: "render", code: ZPL, language: "zpl", outputFormat: "png" }, "image/png"],
+    [{ resource: "label", operation: "render", code: ZPL, language: "zpl", outputFormat: "pdf" }, "application/pdf"],
+    [{ resource: "label", operation: "render", code: "N", language: "epl", outputFormat: "png" }, "image/png"],
+    [{ resource: "barcode", operation: "barcode", barcodeType: "code128", data: "ABC" }, "image/svg+xml"],
+    [{ resource: "barcode", operation: "barcode", barcodeType: "code128", data: "ABC", format: "png" }, "image/png"],
+  ];
+  for (const [params, mime] of cases) {
+    const { ctx } = await run({ params, answer: { body: Buffer.from("X"), headers: { "content-type": mime } } });
+    assert.equal(ctx.calls[0].headers.Accept, mime, JSON.stringify(params));
+  }
+});
+
+test("a JSON answer to a PNG request is an error, not a .png file", async () => {
+  const json = '{"toplam":1,"etiketler":[[]]}';
+  await assert.rejects(
+    run({
+      params: { resource: "label", operation: "render", code: ZPL, language: "zpl", outputFormat: "png" },
+      answer: { body: Buffer.from(json), headers: { "content-type": "application/json" } },
+    }),
+    /Expected image\/png from the API but got application\/json/,
+  );
+});
+
 test("a fractional size keeps its decimals, an integer loses them", async () => {
   const { ctx } = await run({
     params: { resource: "label", operation: "render", code: ZPL, language: "zpl", outputFormat: "png", dpmm: 12, widthIn: 2.25, heightIn: 4, index: 1 },

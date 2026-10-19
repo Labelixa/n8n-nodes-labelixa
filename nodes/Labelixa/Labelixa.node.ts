@@ -7,9 +7,9 @@ import type {
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
-import { checkBaseUrl, describeFailure, planRequest, type Language, type Params } from './plan';
+import { capMessage, checkBaseUrl, describeFailure, planRequest, type Language, type Params } from './plan';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 
 const showFor = (operations: string[], resource = 'label') => ({
 	show: { resource: [resource], operation: operations },
@@ -297,6 +297,14 @@ export class Labelixa implements INodeType {
 					// Usage is attributed to the integration, never to a person.
 					'X-Client': `n8n-nodes-labelixa/${VERSION}`,
 				};
+				// n8n's HTTP helper sends `Accept: application/json` unless told
+				// otherwise, and the ZPL endpoint honours it the way Labelary does:
+				// it answers with the label's field list as JSON instead of the
+				// image. A binary request therefore always names the media type it
+				// expects.
+				if (plan.binary && !headers.Accept) {
+					headers.Accept = plan.binary.mimeType;
+				}
 				// Only when set: an empty header would still be a header.
 				if (apiKey) {
 					headers['X-API-Key'] = apiKey;
@@ -339,6 +347,18 @@ export class Labelixa implements INodeType {
 						throw new NodeOperationError(
 							this.getNode(),
 							`Barcode not generated: ${warnings}`,
+							{ itemIndex: i },
+						);
+					}
+					const contentType = String(
+						response.headers['content-type'] ?? response.headers['Content-Type'] ?? '',
+					);
+					if (contentType && !contentType.startsWith(plan.binary.mimeType)) {
+						// Saving a JSON or HTML body under a .png name gives the
+						// workflow a file that only fails much later, far from the cause.
+						throw new NodeOperationError(
+							this.getNode(),
+							`Expected ${plan.binary.mimeType} from the API but got ${contentType}: ${capMessage(response.body)}`,
 							{ itemIndex: i },
 						);
 					}

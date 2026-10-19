@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-labelixa",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "n8n community node for Labelixa: render, validate and convert ZPL, EPL, TSPL and CPCL label code, and generate barcodes, without a printer.",
   "keywords": [
     "n8n-community-node-package",
