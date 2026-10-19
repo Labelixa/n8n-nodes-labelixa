@@ -24,6 +24,13 @@ for the free tier: rate limited per IP, no watermark. The header is only
 sent when the field is filled. **Test** checks the key against the API: a
 wrong key fails (401), an empty key passes as the free tier.
 
+The API address must be `https`; plain `http` is accepted only for
+`localhost` (local development), and an address with a user name or
+password in it is refused. Redirects are not followed: the API never
+redirects, and following one would carry the `X-API-Key` header to
+whichever host the redirect names. A redirect is reported as an error
+that names its target.
+
 ## Operations
 
 | Resource · operation | What it does | Output |

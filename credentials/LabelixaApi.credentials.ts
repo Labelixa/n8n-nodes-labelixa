@@ -25,7 +25,13 @@ export class LabelixaApi implements ICredentialType {
 		request: {
 			baseURL: '={{$credentials.baseUrl}}',
 			url: '/v1/capabilities',
-			headers: { 'X-API-Key': '={{$credentials.apiKey}}' },
+			// The key is tested only over https: the test must not send it in
+			// the clear to an address the node itself would refuse.
+			headers: {
+				'X-API-Key': '={{String($credentials.baseUrl).startsWith("https://") ? $credentials.apiKey : ""}}',
+			},
+			// Same rule as the node: a redirect would carry X-API-Key along.
+			disableFollowRedirect: true,
 		},
 	};
 
@@ -44,7 +50,8 @@ export class LabelixaApi implements ICredentialType {
 			name: 'baseUrl',
 			type: 'string',
 			default: 'https://api.labelixa.com',
-			description: 'The hosted API, or your own instance for an on-premise deployment',
+			description:
+				'The hosted API, or your own instance for an on-premise deployment. Must be https (plain http only for localhost).',
 		},
 	];
 }

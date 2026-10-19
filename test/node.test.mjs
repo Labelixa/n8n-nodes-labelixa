@@ -266,3 +266,37 @@ test("the credential exposes an optional key and the base URL", () => {
   assert.equal(cred.properties[0].typeOptions.password, true);
   assert.equal(cred.properties[1].default, "https://api.labelixa.com");
 });
+
+test("redirects are not followed, by the node or the credential test", async () => {
+  const { ctx } = await run({ params: { resource: "label", operation: "render", code: ZPL, outputFormat: "png" } });
+  assert.equal(ctx.calls[0].disableFollowRedirect, true);
+  assert.equal(new LabelixaApi().test.request.disableFollowRedirect, true);
+});
+
+test("a redirect is an error that names its target", async () => {
+  await assert.rejects(
+    run({
+      params: { resource: "label", operation: "render", code: ZPL, outputFormat: "png" },
+      answer: { statusCode: 307, headers: { location: "https://evil.example/steal" } },
+    }),
+    /redirect \(HTTP 307\) to https:\/\/evil\.example\/steal/,
+  );
+});
+
+test("plain http to another machine is refused before any request", async () => {
+  const params = { resource: "label", operation: "render", code: ZPL, outputFormat: "png" };
+  for (const baseUrl of ["http://api.labelixa.com", "http://10.0.0.5:8000", "https://api.labelixa.com@evil.example", "ftp://x", "not a url"]) {
+    const ctx = context({ params, baseUrl });
+    await assert.rejects(new Labelixa().execute.call(ctx), /base URL/, baseUrl);
+    assert.equal(ctx.calls.length, 0, baseUrl);
+  }
+  for (const baseUrl of ["http://localhost:8000", "http://127.0.0.1:8000/", "http://[::1]:8000"]) {
+    const { ctx } = await run({ params, baseUrl });
+    assert.equal(ctx.calls.length, 1, baseUrl);
+  }
+});
+
+test("the credential test sends the key only to an https base URL", () => {
+  const header = new LabelixaApi().test.request.headers["X-API-Key"];
+  assert.match(header, /startsWith\("https:\/\/"\)/);
+});

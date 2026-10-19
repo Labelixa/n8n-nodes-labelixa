@@ -237,6 +237,13 @@ export function describeFailure(
 	body: unknown,
 	headers: Record<string, string | string[] | undefined>,
 ): string {
+	if (status >= 300 && status < 400) {
+		const to = headers['location'] ?? headers['Location'] ?? '?';
+		return (
+			`Labelixa answered with a redirect (HTTP ${status}) to ${capMessage(String(to))}; ` +
+			'redirects are not followed, check the base URL in the credential'
+		);
+	}
 	const message = capMessage(body);
 	if (status === 402 || status === 429) {
 		const retry = headers['retry-after'] ?? headers['Retry-After'] ?? '60';
@@ -247,4 +254,36 @@ export function describeFailure(
 		);
 	}
 	return `Labelixa answered HTTP ${status}: ${message}`;
+}
+
+export const DEFAULT_BASE_URL = 'https://api.labelixa.com';
+
+const LOOPBACK = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
+
+/**
+ * Checks the credential's base URL and returns it without a trailing slash.
+ *
+ * The label text and the API key go to this address, so it must be https;
+ * plain http is accepted only for this machine (local development). A URL
+ * with a user name or password is refused: `https://api.labelixa.com@x.test`
+ * reads like the API but talks to another host.
+ */
+export function checkBaseUrl(raw: string | undefined): string {
+	const text = (raw || DEFAULT_BASE_URL).trim();
+	let u: URL;
+	try {
+		u = new URL(text);
+	} catch {
+		throw new Error(`The base URL "${text}" is not a valid URL`);
+	}
+	if (u.username || u.password) {
+		throw new Error('The base URL must not contain a user name or password');
+	}
+	if (u.protocol !== 'https:' && !(u.protocol === 'http:' && LOOPBACK.test(u.hostname))) {
+		throw new Error('The base URL must use https (plain http is allowed only for localhost)');
+	}
+	// A loop, not /\/+$/ (polynomial backtracking on a long run of slashes).
+	let out = text;
+	while (out.endsWith('/')) out = out.slice(0, -1);
+	return out;
 }

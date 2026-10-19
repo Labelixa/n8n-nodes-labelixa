@@ -7,9 +7,9 @@ import type {
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
-import { describeFailure, planRequest, type Language, type Params } from './plan';
+import { checkBaseUrl, describeFailure, planRequest, type Language, type Params } from './plan';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 
 const showFor = (operations: string[], resource = 'label') => ({
 	show: { resource: [resource], operation: operations },
@@ -279,7 +279,13 @@ export class Labelixa implements INodeType {
 			apiKey?: string;
 			baseUrl?: string;
 		};
-		const baseUrl = (credentials.baseUrl || 'https://api.labelixa.com').replace(/\/+$/, '');
+		let baseUrl: string;
+		try {
+			baseUrl = checkBaseUrl(credentials.baseUrl);
+		} catch (e) {
+			// Before any item: nothing, and no key, is sent to a bad address.
+			throw new NodeOperationError(this.getNode(), (e as Error).message);
+		}
 		const apiKey = (credentials.apiKey || '').trim();
 
 		for (let i = 0; i < items.length; i++) {
@@ -304,6 +310,11 @@ export class Labelixa implements INodeType {
 					encoding: plan.binary ? 'arraybuffer' : plan.text ? 'text' : 'json',
 					returnFullResponse: true,
 					ignoreHttpStatusErrors: true,
+					// The API never redirects. Following one would carry the
+					// X-API-Key header to whatever host the redirect names: the
+					// HTTP stack strips only Authorization and Cookie on a
+					// cross-host redirect. A 3xx surfaces as an error below.
+					disableFollowRedirect: true,
 				})) as {
 					statusCode: number;
 					body: unknown;

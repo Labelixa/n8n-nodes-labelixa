@@ -4,6 +4,23 @@ All notable changes to this package are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-10-19
+
+### Security
+- Redirects are no longer followed, by the node or by the credential test.
+  n8n's HTTP stack strips only `Authorization` and `Cookie` when a
+  redirect changes host, so the `X-API-Key` header would have been
+  carried to whatever address the redirect pointed at. A redirect is now
+  an error that names its target.
+- The base URL must be `https`; plain `http` is accepted only for
+  `localhost` and loopback addresses, and a URL with a user name or
+  password is refused. The node stops before sending anything.
+- The credential test sends the key only to an `https` base URL.
+
+### Fixed
+
+- Trailing slashes in the base URL are stripped with a loop instead of `/\/+$/` (polynomial backtracking).
+
 ## [0.1.0] - 2026-09-23
 
 ### Added
