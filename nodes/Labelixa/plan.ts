@@ -261,26 +261,42 @@ export const DEFAULT_BASE_URL = 'https://api.labelixa.com';
 const LOOPBACK = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 
 /**
- * Checks the credential's base URL and returns it without a trailing slash.
+ * Why an address must not receive the label text or the API key, or null
+ * when it may.
  *
- * The label text and the API key go to this address, so it must be https;
- * plain http is accepted only for this machine (local development). A URL
- * with a user name or password is refused: `https://api.labelixa.com@x.test`
- * reads like the API but talks to another host.
+ * It must be https; plain http is accepted only for this machine (local
+ * development). A URL with a user name or password is refused:
+ * `https://api.labelixa.com@x.test` reads like the API but talks to another
+ * host.
  */
-export function checkBaseUrl(raw: string | undefined): string {
-	const text = (raw || DEFAULT_BASE_URL).trim();
-	let u: URL;
+export function baseUrlProblem(text: string): string | null {
+	let u: URL | null = null;
 	try {
 		u = new URL(text);
 	} catch {
-		throw new Error(`The base URL "${text}" is not a valid URL`);
+		u = null;
+	}
+	if (!u) {
+		return `The base URL "${text}" is not a valid URL`;
 	}
 	if (u.username || u.password) {
-		throw new Error('The base URL must not contain a user name or password');
+		return 'The base URL must not contain a user name or password';
 	}
 	if (u.protocol !== 'https:' && !(u.protocol === 'http:' && LOOPBACK.test(u.hostname))) {
-		throw new Error('The base URL must use https (plain http is allowed only for localhost)');
+		return 'The base URL must use https (plain http is allowed only for localhost)';
+	}
+	return null;
+}
+
+/**
+ * Checks the credential's base URL and returns it without a trailing slash.
+ * The label text and the API key go to this address (see baseUrlProblem).
+ */
+export function checkBaseUrl(raw: string | undefined): string {
+	const text = (raw || DEFAULT_BASE_URL).trim();
+	const problem = baseUrlProblem(text);
+	if (problem) {
+		throw new Error(problem);
 	}
 	// A loop, not /\/+$/ (polynomial backtracking on a long run of slashes).
 	let out = text;

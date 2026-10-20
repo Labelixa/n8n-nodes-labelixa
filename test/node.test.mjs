@@ -2,7 +2,7 @@
 // headers and body, and turns the server's answers into the right items.
 //
 // No n8n runtime and no network: a fake execution context stands in for
-// IExecuteFunctions and records every httpRequest call. The compiled
+// IExecuteFunctions and records every authenticated request. The compiled
 // output in dist/ is what runs, the same files n8n would load.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -30,9 +30,13 @@ function context({ params, items = [{ json: {} }], apiKey = "lbx_test", baseUrl 
     getNode: () => ({ name: "Labelixa", type: "labelixa" }),
     continueOnFail: () => continueOnFail,
     helpers: {
-      httpRequest: async (options) => {
-        calls.push(options);
-        const a = typeof answer === "function" ? answer(options) : answer;
+      // n8n applies the credential's `authenticate` to the request, then
+      // sends it; the fake does the same with the real credential class.
+      httpRequestWithAuthentication: async (credentialType, options) => {
+        assert.equal(credentialType, "labelixaApi");
+        const authed = await new LabelixaApi().authenticate({ apiKey, baseUrl }, options);
+        calls.push(authed);
+        const a = typeof answer === "function" ? answer(authed) : answer;
         return { statusCode: 200, body: "OK", headers: {}, ...a };
       },
       prepareBinaryData: async (buffer, fileName, mimeType) => ({
@@ -63,6 +67,9 @@ test("package manifest points at files the build produces", () => {
   assert.equal(node.description.name, "labelixa");
   assert.equal(node.description.credentials[0].name, new LabelixaApi().name);
   assert.equal(node.description.icon, "file:labelixa.svg");
+  // The credential icon path is relative to the compiled credential file.
+  const credIcon = new LabelixaApi().icon.replace(/^file:/, "");
+  assert.doesNotThrow(() => readFileSync(join(root, "dist/credentials", credIcon)), "credential icon missing");
 });
 
 test("render uses the Labelary-shaped path with headers, key and raw body", async () => {
@@ -323,7 +330,26 @@ test("plain http to another machine is refused before any request", async () => 
   }
 });
 
-test("the credential test sends the key only to an https base URL", () => {
-  const header = new LabelixaApi().test.request.headers["X-API-Key"];
-  assert.match(header, /startsWith\("https:\/\/"\)/);
+test("the credential adds the key only when set and only to an accepted address", async () => {
+  const auth = new LabelixaApi().authenticate;
+  const key = async (apiKey, options) => (await auth({ apiKey }, { headers: {}, ...options })).headers["X-API-Key"];
+  // Node requests carry a full URL.
+  assert.equal(await key("lbx_k", { url: "https://api.labelixa.com/v1/capabilities" }), "lbx_k");
+  assert.equal(await key(" lbx_k ", { url: "http://localhost:8000/v1/capabilities" }), "lbx_k");
+  assert.equal(await key("", { url: "https://api.labelixa.com/v1/capabilities" }), undefined);
+  assert.equal(await key("lbx_k", { url: "http://api.labelixa.com/v1/capabilities" }), undefined);
+  assert.equal(await key("lbx_k", { url: "https://api.labelixa.com@evil.example/v1" }), undefined);
+  // The credential test request carries baseURL + a relative path.
+  assert.equal(await key("lbx_k", { baseURL: "https://api.labelixa.com", url: "/v1/capabilities" }), "lbx_k");
+  assert.equal(await key("lbx_k", { baseURL: "http://10.0.0.5:8000", url: "/v1/capabilities" }), undefined);
+  // The request it is given is not modified in place.
+  const options = { url: "https://api.labelixa.com/v1/x", headers: { A: "1" } };
+  await auth({ apiKey: "lbx_k" }, options);
+  assert.deepEqual(options.headers, { A: "1" });
+});
+
+test("the credential test calls the capabilities endpoint on the configured base URL", () => {
+  const { request } = new LabelixaApi().test;
+  assert.equal(request.baseURL, "={{$credentials.baseUrl}}");
+  assert.equal(request.url, "/v1/capabilities");
 });

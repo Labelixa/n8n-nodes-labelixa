@@ -1,0 +1,120 @@
+name: publish
+
+# Publishes the package to npm with a provenance statement when a version
+# tag (vX.Y.Z) is pushed. n8n accepts a community node for verification only
+# when it was published this way, from GitHub Actions.
+#
+# Authentication is npm Trusted Publishing (OIDC): npm matches the short-lived
+# GitHub token against the package's trusted publisher (this repository,
+# workflow publish.yml, environment release). No npm token is stored here.
+#
+# A manual run (workflow_dispatch) checks everything and lists the package
+# contents; it publishes only with dry_run set to false, and only from main.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Check and list the package, do not publish"
+        type: boolean
+        default: true
+
+# Least privilege: only the publish job gets an OIDC token.
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  # Trusted Publishing needs npm >= 11.5.1; Node 22 ships npm 10. Pinned:
+  # a floating "latest" would change the publishing client without review.
+  NPM_VERSION: "11.20.0"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+      # The tag, package.json and the CHANGELOG must name the same version:
+      # a wrong tag must not publish whatever version package.json holds.
+      - name: Version check
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+          if ! grep -q "^## \\[$version\\] - [0-9]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no dated entry for $version"
+            exit 1
+          fi
+          echo "version $version"
+      - run: npm ci --ignore-scripts
+      - run: npm run lint
+      - run: npm test
+      - run: node scripts/check-publish.mjs
+      - run: npm pack --dry-run
+
+  publish:
+    needs: check
+    if: github.ref_type == 'tag' || (inputs.dry_run == false && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write        # OIDC: Trusted Publishing and the provenance signature
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: npm CLI (pinned, Trusted Publishing needs >= 11.5.1)
+        run: npm install -g "npm@${NPM_VERSION}"
+      # Install scripts stay off while an OIDC token can be minted.
+      - run: npm ci --ignore-scripts
+      - name: Already published?
+        id: published
+        run: |
+          set -uo pipefail
+          spec="$(node -p "const p=require('./package.json'); p.name + '@' + p.version")"
+          echo "spec=$spec" >> "$GITHUB_OUTPUT"
+          if npm view "$spec" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$spec is already on npm; publish skipped"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      # prepublishOnly builds, runs the publish guard and the tests again,
+      # so the tarball is built from this checkout in this job.
+      - name: npm publish (Trusted Publishing, provenance)
+        if: steps.published.outputs.exists != 'true'
+        run: npm publish --provenance --access public
+      - name: Provenance check
+        env:
+          SPEC: ${{ steps.published.outputs.spec }}
+        run: |
+          set -uo pipefail
+          for i in $(seq 1 20); do
+            if [ -n "$(npm view "$SPEC" dist.attestations.url 2>/dev/null)" ]; then
+              echo "$SPEC is on npm with a provenance attestation"
+              exit 0
+            fi
+            echo "waiting for $SPEC attestation ($i/20)"
+            sleep 30
+          done
+          echo "::error::$SPEC has no provenance attestation on npm"
+          exit 1
