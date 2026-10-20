@@ -47,6 +47,37 @@ hidden retries: a retry that swallows a quota answer turns a clear signal
 into a slow mystery. <https://labelixa.com/docs/api> is the source of
 truth.
 
+Binary files are named `label-<item>.<ext>` (Render) and
+`barcode-<item>.<ext>` (Barcode · Generate), where `<item>` is the
+input item's index.
+
+## Output field names
+
+The API names some JSON fields in Turkish; those names are its stable wire
+protocol. The node renames them to English after parsing, at any depth, so
+a workflow reads `{{ $json.summary.total }}` rather than the wire name.
+A few fields carry a code word from a fixed set, and those values are
+English too: `risk.level` (`low`, `medium`, `high`), `risk.reasons`
+(`native`, `emulation`, `no_zpl_support`, `size_finding`),
+`model.category` (`desktop`, `industrial`, `mobile`),
+`language_support.type` (`native`, `emulation`), `limitation`
+(`risk_analysis`) and the Detect Language `evidence[].code` signals (for
+example `zpl_command_density`, `epl_text_line`, `cpcl_header`). No other
+value is changed: free text, rule codes such as `ZPL1001`, dates and any
+code word the node does not know pass through as the API sent them, and so
+does a field the node does not know. The complete maps ship with the
+package in `dist/nodes/Labelixa/contract.js`.
+
+| Operation | Output fields (English names) |
+|---|---|
+| Validate | `diagnostics[]`: `code`, `severity`, `message_key`, `message`, positions, `args` (e.g. `command`, `parameter`, `value`, `expected`, `actual`), `quickfix` (`title`, `title_key`, `offset`, `end_offset`, `replacement`), `preview`, `url`; `summary` (`total`, `error`, `warning`, `info`); `fields`; `rfid[]` (`operation`, `format`, `bank`, `data`) |
+| Detect Language | `language`, `confidence`, `mixed`, `scores`, `evidence[]` (`code`, `line`) |
+| Check Printer Compatibility | `model` (`manufacturer`, `model`, `category`, `dpi`), `language_support` (`type`, `evidence`, `source_url`, `verification`, `note`), `risk` (`level`, `reasons`), `has_size_rule`, `size_findings[]`, `preview_coverage` (`supported`, `partial`, `unsupported`, `ignored`, `unknown`), `limitation` |
+
+Versions up to 0.1.3 returned the API's own names and values (for example
+`ozet.toplam` for `summary.total`); an expression written against them
+needs the new name or value.
+
 ## Errors worth knowing
 
 - **Quota (HTTP 402 / 429)** — the node fails with one sentence that

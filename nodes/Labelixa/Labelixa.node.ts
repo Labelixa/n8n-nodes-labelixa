@@ -7,9 +7,10 @@ import type {
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
+import { englishFields } from './contract';
 import { capMessage, checkBaseUrl, describeFailure, planRequest, type Language, type Params } from './plan';
 
-const VERSION = '0.1.3';
+const VERSION = '0.1.4';
 
 const showFor = (operations: string[], resource = 'label') => ({
 	show: { resource: [resource], operation: operations },
@@ -361,7 +362,7 @@ export class Labelixa implements INodeType {
 						);
 					}
 					const binaryPropertyName = this.getNodeParameter('binaryPropertyName', i, 'data') as string;
-					const fileName = `label-${i}.${plan.binary.extension}`;
+					const fileName = `${params.operation === 'barcode' ? 'barcode' : 'label'}-${i}.${plan.binary.extension}`;
 					const buffer = Buffer.from(response.body as ArrayBuffer);
 					out.push({
 						json: { warnings, bytes: buffer.length, fileName },
@@ -385,10 +386,13 @@ export class Labelixa implements INodeType {
 					continue;
 				}
 
-				let json = response.body as IDataObject;
-				if (typeof json === 'string') {
-					json = JSON.parse(json) as IDataObject;
+				let body = response.body;
+				if (typeof body === 'string') {
+					body = JSON.parse(body);
 				}
+				// Some API field names are Turkish wire names (see contract.ts);
+				// the item carries their English names instead.
+				const json = englishFields(body) as IDataObject;
 				out.push({ json, pairedItem: { item: i } });
 			} catch (error) {
 				if (this.continueOnFail()) {

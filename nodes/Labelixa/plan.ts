@@ -7,6 +7,8 @@
  * https://labelixa.com/docs/api
  */
 
+import { ERROR_FIELD } from './contract';
+
 export const LANGUAGES = ['zpl', 'epl', 'tspl', 'cpcl'] as const;
 export type Language = (typeof LANGUAGES)[number];
 
@@ -219,12 +221,40 @@ export function capMessage(body: unknown): string {
 	let text: string;
 	if (Buffer.isBuffer(body)) {
 		text = body.toString('utf8');
+	} else if (body instanceof ArrayBuffer) {
+		text = Buffer.from(body).toString('utf8');
 	} else if (typeof body === 'string') {
 		text = body;
 	} else {
 		text = JSON.stringify(body ?? '');
 	}
 	return text.length > 500 ? text.slice(0, 500) : text;
+}
+
+/**
+ * The server's own sentence from an error answer. The API sends errors as
+ * one JSON field (see ERROR_FIELD); its text is passed on, not the JSON
+ * around it, so the wire field name never shows up in a message. Any other
+ * body is passed on as it is.
+ */
+export function errorText(body: unknown): string {
+	let parsed: unknown = body;
+	if (typeof body === 'string' || Buffer.isBuffer(body) || body instanceof ArrayBuffer) {
+		const text = typeof body === 'string' ? body : Buffer.from(body as ArrayBuffer).toString('utf8');
+		try {
+			// An error answer is a sentence; a large body is not one.
+			parsed = text.length <= 65536 ? JSON.parse(text) : undefined;
+		} catch {
+			parsed = undefined;
+		}
+	}
+	if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+		const message = (parsed as Record<string, unknown>)[ERROR_FIELD];
+		if (typeof message === 'string') {
+			return capMessage(message);
+		}
+	}
+	return capMessage(body);
 }
 
 /**
@@ -244,7 +274,7 @@ export function describeFailure(
 			'redirects are not followed, check the base URL in the credential'
 		);
 	}
-	const message = capMessage(body);
+	const message = errorText(body);
 	if (status === 402 || status === 429) {
 		const retry = headers['retry-after'] ?? headers['Retry-After'] ?? '60';
 		const action = headers['x-quota-action'] ?? headers['X-Quota-Action'];

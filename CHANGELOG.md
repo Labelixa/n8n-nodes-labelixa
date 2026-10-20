@@ -4,6 +4,33 @@ All notable changes to this package are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-10-20
+
+### Changed
+- **The JSON output of Validate, Detect Language and Check Printer
+  Compatibility uses English field names.** Some field names in the API's
+  answers are Turkish; they are the API's stable wire names and stay as
+  they are on the server, so the node renames them after parsing, at any
+  depth: for example `ozet.toplam` is now `summary.total`, `mesaj` is
+  `message`, `dil`/`guven` are `language`/`confidence`, and
+  `risk.seviye` is `risk.level`. The full map is in the README.
+- The code-word values of a few fields are English as well: `risk.level`
+  (`dusuk`/`orta`/`yuksek` are now `low`/`medium`/`high`),
+  `risk.reasons`, `model.category`, `language_support.type`, `limitation`
+  and the Detect Language `evidence[].code` signals. Free text, rule codes,
+  dates and unknown values are not changed, and a field the node does not
+  know passes through unchanged.
+- **Both changes alter the output shape:** an expression that reads an old
+  name or value (for example `{{ $json.ozet.toplam }}` or a comparison
+  with `"dusuk"`) must be updated to the new one.
+- An error answer's message is the server's sentence alone, without the
+  JSON field it arrives in.
+
+### Fixed
+- Barcode · Generate named its file `label-0.png`; it is now
+  `barcode-<item>.png` or `barcode-<item>.svg`. Label renders keep
+  `label-<item>.<ext>`.
+
 ## [0.1.3] - 2026-10-19
 
 ### Added

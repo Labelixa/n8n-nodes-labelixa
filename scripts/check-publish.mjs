@@ -35,7 +35,10 @@ const WORD = new RegExp("\\b(?:" + WORDS.join("|") + ")\\b", "i");
 // solves this the same way (one `contract.go`), and for the same reason: an
 // exemption pinned to a single file keeps the rule alive everywhere else.
 // Ticket ids, non-English characters and audit markers are STILL checked here.
-const WORD_EXEMPT = new Set(["contract.js"]);
+// In this package that file is the compiled `nodes/Labelixa/contract.ts`,
+// which maps the API's answer field names to the English names the node
+// outputs; it is matched by its full path, so no other file is exempt.
+const WORD_EXEMPT = new Set(["dist/nodes/Labelixa/contract.js"]);
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "test", "scripts", "dist", "out"]);
 const BINARY = new Set([".png", ".jpg", ".gif", ".ico", ".vsix", ".tgz", ".zip", ".whl"]);
