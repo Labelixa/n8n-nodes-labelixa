@@ -71,6 +71,7 @@ than softens.
 
 ```sh
 npm install
+npm run lint      # n8n's community node linter (@n8n/node-cli, strict mode)
 npm test          # tsc build, icons, then node --test against dist/
 ```
 

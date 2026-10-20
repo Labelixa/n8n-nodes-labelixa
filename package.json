@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-labelixa",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "n8n community node for Labelixa: render, validate and convert ZPL, EPL, TSPL and CPCL label code, and generate barcodes, without a printer.",
   "keywords": [
     "n8n-community-node-package",
@@ -37,12 +37,14 @@
   ],
   "scripts": {
     "build": "tsc && node scripts/copy-icons.mjs",
+    "lint": "n8n-node lint",
     "test": "npm run build && node --test test/node.test.mjs",
     "check-publish": "node scripts/check-publish.mjs",
     "prepublishOnly": "npm run build && node scripts/check-publish.mjs && node --test test/node.test.mjs"
   },
   "n8n": {
     "n8nNodesApiVersion": 1,
+    "strict": true,
     "credentials": [
       "dist/credentials/LabelixaApi.credentials.js"
     ],
@@ -51,14 +53,12 @@
     ]
   },
   "devDependencies": {
+    "@n8n/node-cli": "0.51.2",
     "@types/node": "^22.0.0",
-    "n8n-workflow": "^1.0.0",
+    "n8n-workflow": "2.43.5",
     "typescript": "^5.0.0"
   },
   "peerDependencies": {
     "n8n-workflow": "*"
-  },
-  "overrides": {
-    "form-data": ">=4.0.6"
   }
 }

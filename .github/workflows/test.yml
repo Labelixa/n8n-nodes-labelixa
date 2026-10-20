@@ -19,7 +19,12 @@ jobs:
           node-version: "22"
           cache: npm
       # `npm ci` (not `install`): the lock file pins the dev toolchain.
-      - run: npm ci
+      # `--ignore-scripts`: no dependency needs an install script for lint,
+      # build or test (isolated-vm, pulled in by n8n-workflow, would try to
+      # compile a native module).
+      - run: npm ci --ignore-scripts
+      # n8n's community node linter (strict mode), required for verification.
+      - run: npm run lint
       # Builds dist/ and runs the tests against it (fake execute context,
       # no n8n runtime, no network).
       - run: npm test

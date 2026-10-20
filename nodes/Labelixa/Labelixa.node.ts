@@ -9,7 +9,7 @@ import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
 import { capMessage, checkBaseUrl, describeFailure, planRequest, type Language, type Params } from './plan';
 
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 
 const showFor = (operations: string[], resource = 'label') => ({
 	show: { resource: [resource], operation: operations },
@@ -17,20 +17,20 @@ const showFor = (operations: string[], resource = 'label') => ({
 
 const sizeProperties = (operations: string[]) => [
 	{
-		displayName: 'Print Density (dpmm)',
+		displayName: 'Print Density',
 		name: 'dpmm',
 		type: 'options' as const,
 		options: [
-			{ name: '6 dpmm (152 dpi)', value: 6 },
-			{ name: '8 dpmm (203 dpi)', value: 8 },
-			{ name: '12 dpmm (300 dpi)', value: 12 },
-			{ name: '24 dpmm (600 dpi)', value: 24 },
+			{ name: '6 Dots/mm (152 DPI)', value: 6 },
+			{ name: '8 Dots/mm (203 DPI)', value: 8 },
+			{ name: '12 Dots/mm (300 DPI)', value: 12 },
+			{ name: '24 Dots/mm (600 DPI)', value: 24 },
 		],
 		default: 8,
 		displayOptions: showFor(operations),
 	},
 	{
-		displayName: 'Width (inches)',
+		displayName: 'Width in Inches',
 		name: 'widthIn',
 		type: 'number' as const,
 		default: 4,
@@ -38,7 +38,7 @@ const sizeProperties = (operations: string[]) => [
 		displayOptions: showFor(operations),
 	},
 	{
-		displayName: 'Height (inches)',
+		displayName: 'Height in Inches',
 		name: 'heightIn',
 		type: 'number' as const,
 		default: 6,
@@ -81,16 +81,10 @@ export class Labelixa implements INodeType {
 				displayOptions: { show: { resource: ['label'] } },
 				options: [
 					{
-						name: 'Render',
-						value: 'render',
-						action: 'Render a label to PNG or PDF',
-						description: 'One label as PNG, or ZPL as PDF (optionally every label in one document)',
-					},
-					{
-						name: 'Validate',
-						value: 'validate',
-						action: 'Validate label code',
-						description: "The linter's structured report: diagnostics with code, severity and position",
+						name: 'Check Printer Compatibility',
+						value: 'compatibility',
+						action: 'Check ZPL against a printer model',
+						description: 'Risk report for a printer model such as zebra/zd421 (a risk report, not an emulator)',
 					},
 					{
 						name: 'Convert to EPL',
@@ -105,10 +99,16 @@ export class Labelixa implements INodeType {
 						description: 'Which of ZPL, EPL, TSPL or CPCL the code is, with a confidence tier',
 					},
 					{
-						name: 'Check Printer Compatibility',
-						value: 'compatibility',
-						action: 'Check ZPL against a printer model',
-						description: 'Risk report for a printer model such as zebra/zd421 (a risk report, not an emulator)',
+						name: 'Render',
+						value: 'render',
+						action: 'Render a label to PNG or PDF',
+						description: 'One label as PNG, or ZPL as PDF (optionally every label in one document)',
+					},
+					{
+						name: 'Validate',
+						value: 'validate',
+						action: 'Validate label code',
+						description: "The linter's structured report: diagnostics with code, severity and position",
 					},
 				],
 				default: 'render',
@@ -164,7 +164,7 @@ export class Labelixa implements INodeType {
 				type: 'options',
 				options: [
 					{ name: 'PNG', value: 'png' },
-					{ name: 'PDF (ZPL only)', value: 'pdf' },
+					{ name: 'PDF (ZPL Only)', value: 'pdf' },
 				],
 				default: 'png',
 				displayOptions: showFor(['render']),
@@ -237,15 +237,15 @@ export class Labelixa implements INodeType {
 				type: 'options',
 				options: [
 					{ name: 'Code 128', value: 'code128' },
-					{ name: 'QR Code', value: 'qr' },
+					{ name: 'Code 39', value: 'code39' },
+					{ name: 'Data Matrix', value: 'datamatrix' },
 					{ name: 'EAN-13', value: 'ean13' },
 					{ name: 'EAN-8', value: 'ean8' },
-					{ name: 'UPC-A', value: 'upca' },
-					{ name: 'Code 39', value: 'code39' },
 					{ name: 'GS1-128', value: 'gs1-128' },
-					{ name: 'Data Matrix', value: 'datamatrix' },
-					{ name: 'PDF417', value: 'pdf417' },
 					{ name: 'Interleaved 2 of 5', value: 'itf' },
+					{ name: 'PDF417', value: 'pdf417' },
+					{ name: 'QR Code', value: 'qr' },
+					{ name: 'UPC-A', value: 'upca' },
 				],
 				default: 'code128',
 				displayOptions: showFor(['barcode'], 'barcode'),
@@ -286,7 +286,6 @@ export class Labelixa implements INodeType {
 			// Before any item: nothing, and no key, is sent to a bad address.
 			throw new NodeOperationError(this.getNode(), (e as Error).message);
 		}
-		const apiKey = (credentials.apiKey || '').trim();
 
 		for (let i = 0; i < items.length; i++) {
 			try {
@@ -305,11 +304,10 @@ export class Labelixa implements INodeType {
 				if (plan.binary && !headers.Accept) {
 					headers.Accept = plan.binary.mimeType;
 				}
-				// Only when set: an empty header would still be a header.
-				if (apiKey) {
-					headers['X-API-Key'] = apiKey;
-				}
-				const response = (await this.helpers.httpRequest({
+				// The X-API-Key header is added by the credential's `authenticate`
+				// (only when a key is set, and only towards an address the node
+				// accepts).
+				const response = (await this.helpers.httpRequestWithAuthentication.call(this, 'labelixaApi', {
 					method: plan.method,
 					url: baseUrl + plan.path,
 					qs: plan.qs,
@@ -400,7 +398,10 @@ export class Labelixa implements INodeType {
 					});
 					continue;
 				}
-				throw error;
+				// A NodeOperationError is passed through unchanged by this
+				// constructor; anything else (a network failure, a malformed JSON
+				// body) is wrapped so n8n shows it against the failing item.
+				throw new NodeOperationError(this.getNode(), error as Error, { itemIndex: i });
 			}
 		}
 		return [out];
