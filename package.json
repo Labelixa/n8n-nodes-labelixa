@@ -53,7 +53,7 @@
     ]
   },
   "devDependencies": {
-    "@n8n/node-cli": "0.51.2",
+    "@n8n/node-cli": "0.53.2",
     "@types/node": "^22.0.0",
     "n8n-workflow": "2.43.5",
     "typescript": "^5.0.0"
