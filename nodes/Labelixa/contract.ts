@@ -10,8 +10,10 @@
  * (`risk.seviye: "dusuk"`); those are translated per field (VALUE_NAMES).
  *
  * Endpoints covered: /v1/diagnostics and /v1/{epl,tspl,cpcl}/diagnostics
- * (Validate), /v1/language-detect (Detect Language) and /v1/compatibility
- * (Check Printer Compatibility). Reference: https://labelixa.com/docs/api
+ * (Validate), /v1/language-detect (Detect Language), /v1/compatibility
+ * (Check Printer Compatibility), and POST /v1/print plus
+ * GET /v1/print/jobs/{id} (Print Label, Get Print Status; see the PRINT_*
+ * tables at the end). Reference: https://labelixa.com/docs/api
  */
 
 /** The field an error answer carries its message in: `{"hata": "..."}`. */
@@ -144,6 +146,152 @@ export function englishFields(value: unknown, path = ''): unknown {
 		const renamed = own(FIELD_NAMES, key) ? FIELD_NAMES[key] : key;
 		const name = renamed !== key && (renamed in source || renamed in out) ? key : renamed;
 		out[name] = englishFields(inner, path ? `${path}.${name}` : name);
+	}
+	return out;
+}
+
+// ---- Printing: POST /v1/print and GET /v1/print/jobs/{id} -----------------
+
+/**
+ * Request body field names of POST /v1/print. `yuk` is the payload (the raw
+ * label bytes, carried verbatim; `zpl` is its older alias and is not sent),
+ * `dil` the printer language, `kopya` the copy count, `etiket_sayisi` the
+ * number of labels in the payload and `kaynak_is_id` a render job the
+ * payload came from.
+ */
+export const PRINT_REQUEST = Object.freeze({
+	deviceId: 'device_id',
+	printerGroup: 'printer_group',
+	payload: 'yuk',
+	language: 'dil',
+	copies: 'kopya',
+	labelCount: 'etiket_sayisi',
+	sourceJobId: 'kaynak_is_id',
+});
+
+/**
+ * Wire key -> output key for the two print answers. Kept apart from
+ * FIELD_NAMES on purpose: some of these wire words mean something else in
+ * other answers (`etiket` is a label count here and an evidence tag inside
+ * the printer status, which the PRINTER_* tables handle). The English names
+ * are the ones the Labelixa MCP server uses for the same fields.
+ */
+export const PRINT_FIELD_NAMES: Readonly<Record<string, string>> = Object.freeze({
+	etiket: 'label_count',
+	ucretlendi: 'charged',
+	dil: 'language',
+	uyari: 'warning',
+	uyari_kodu: 'warning_code',
+	sablon_id: 'template_id',
+	etiket_id: 'label_id',
+	cihaz_eslenmis: 'device_mapped',
+	basim_onaylandi: 'print_confirmed',
+	agent_son_gorulme: 'agent_last_seen',
+	agent_son_gorulme_sn_once: 'agent_last_seen_seconds_ago',
+	not: 'note',
+	kopya: 'copies',
+	etiket_sayisi: 'labels_per_copy',
+	kaynak_is_id: 'source_job_id',
+	zpl_ozeti: 'payload_hash',
+	hata_tipi: 'error_type',
+	asama: 'stage',
+	gonderilen_kopya: 'copies_sent',
+	yaziciya_giden_var_mi: 'reached_printer',
+});
+
+/**
+ * Status answer fields the node does not pass on as they are:
+ * `asama_ozeti` is a server sentence that is not in English (the node writes
+ * its own `stage_summary` from `stage`, `copies_sent` and `copies`), and
+ * `yazici_durumu` is the printer's own report, mapped by englishPrinterStatus.
+ */
+export const PRINT_STAGE_SENTENCE_FIELD = 'asama_ozeti';
+export const PRINTER_STATUS_FIELD = 'yazici_durumu';
+
+/** The printer status report (Zebra ~HS / ~HQES), field by field. */
+export const PRINTER_STATUS_FIELDS = Object.freeze({
+	health: 'saglik',
+	basis: 'etiket',
+	flags: 'bayraklar',
+	attempt: 'deneme',
+	finished: 'bitti_cikarimi',
+	value: 'deger',
+});
+
+export const PRINTER_HEALTH: Readonly<Record<string, string>> = Object.freeze({
+	hazir: 'ready',
+	engel: 'blocked',
+	bilinmiyor: 'unknown',
+});
+
+/** Whether a statement was reported by the printer or inferred from it. */
+export const PRINTER_BASIS: Readonly<Record<string, string>> = Object.freeze({
+	KANIT: 'reported',
+	CIKARIM: 'inferred',
+});
+
+export const PRINTER_FLAGS: Readonly<Record<string, string>> = Object.freeze({
+	kagit_bitti: 'media_out',
+	duraklatildi: 'paused',
+	tampon_dolu: 'buffer_full',
+	tanilama_modu: 'diagnostic_mode',
+	kismi_format: 'partial_format',
+	bozuk_ram: 'corrupt_ram',
+	sicaklik_alti: 'under_temperature',
+	sicaklik_ustu: 'over_temperature',
+	kafa_acik: 'head_open',
+	serit_bitti: 'ribbon_out',
+	etiket_bekliyor: 'label_waiting',
+	hqes_hata: 'printer_error',
+});
+
+/**
+ * Returns a copy of a print answer (top level only; both answers are flat)
+ * with every known wire key renamed. As in englishFields, an English name
+ * already present is never overwritten.
+ */
+export function englishPrintFields(value: Record<string, unknown>): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const [key, inner] of Object.entries(value)) {
+		const renamed = own(PRINT_FIELD_NAMES, key) ? PRINT_FIELD_NAMES[key] : key;
+		const name = renamed !== key && (renamed in value || renamed in out) ? key : renamed;
+		out[name] = inner;
+	}
+	return out;
+}
+
+const mapValue = (table: Readonly<Record<string, string>>, v: unknown): unknown =>
+	typeof v === 'string' && own(table, v) ? table[v] : v;
+
+/**
+ * The printer's own report in English: `health` (ready, blocked, unknown),
+ * `basis` (reported or inferred), `flags`, `attempt` and
+ * `finished_inference` ({ value, basis }; always an inference, never a print
+ * confirmation). The server's free-text reasons are not passed on. A missing
+ * report stays null (the printer was not asked).
+ */
+export function englishPrinterStatus(value: unknown): unknown {
+	if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) {
+		return value ?? null;
+	}
+	const src = value as Record<string, unknown>;
+	const f = PRINTER_STATUS_FIELDS;
+	const out: Record<string, unknown> = {
+		health: mapValue(PRINTER_HEALTH, src[f.health]) ?? null,
+		basis: mapValue(PRINTER_BASIS, src[f.basis]) ?? null,
+		flags: Array.isArray(src[f.flags])
+			? (src[f.flags] as unknown[]).map((x) => mapValue(PRINTER_FLAGS, x))
+			: [],
+		attempt: src[f.attempt] ?? null,
+		finished_inference: null,
+	};
+	const finished = src[f.finished];
+	if (finished && typeof finished === 'object' && !Array.isArray(finished)) {
+		const fin = finished as Record<string, unknown>;
+		out.finished_inference = {
+			value: fin[f.value] ?? null,
+			basis: mapValue(PRINTER_BASIS, fin[f.basis]) ?? null,
+		};
 	}
 	return out;
 }

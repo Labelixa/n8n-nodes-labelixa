@@ -4,6 +4,37 @@ All notable changes to this package are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-10-26
+
+### Added
+- **Print Job · Print Label** (`POST /v1/print`): queues raw label code
+  (ZPL, EPL, TSPL, CPCL or raw bytes) for a device or a printer group, with
+  copies, an optional printer language, the number of labels in the
+  payload and an optional source render job.
+- **Print Job · Get Print Status** (`GET /v1/print/jobs/{id}`): the job's
+  status (`queued`, `dispatching`, `dispatched`, `failed`, `cancelled`,
+  `uncertain`) with a plain `status_meaning`, `final`, `needs_attention`,
+  an English `stage_summary`, the printer's own report as
+  `printer_status`, and `warning_code: "delivery_uncertain"` with its
+  warning for an uncertain job.
+- A print answer that names a saved label passes its id on as `label_id`.
+- Every Print Label request sends an `Idempotency-Key`. By default it is
+  derived from the n8n execution id, the node and the item index, so
+  n8n's *Retry On Fail* re-sends the same key and cannot queue a second
+  job; the *Idempotency Key* option takes your own key (for example an
+  order number) to protect across executions as well.
+- Print failures say whether a job may exist: HTTP 402 (plan or free
+  print allowance) and other 4xx answers are permanent and not retried;
+  HTTP 429 carries the server's `Retry-After`; a timeout, a dropped
+  connection or a 5xx answer is reported as "outcome unknown" with the
+  advice to re-send with the same key, never as a reason to print again.
+  With *Continue On Fail* the item carries `retryable`,
+  `retry_after_seconds`, `outcome` and `idempotency_key`.
+- A *Timeout (Seconds)* option for Print Label (default 30).
+- No print answer is ever reported as printed: Labelixa cannot confirm
+  that a label physically came out of a printer, so `print_confirmed` is
+  always `false` and `dispatched` means the bytes were delivered.
+
 ## [0.1.4] - 2026-10-20
 
 ### Changed

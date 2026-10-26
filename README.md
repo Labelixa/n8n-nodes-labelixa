@@ -2,7 +2,8 @@
 
 An [n8n](https://n8n.io) community node for [Labelixa](https://labelixa.com):
 render, validate and convert thermal printer label code — ZPL, EPL, TSPL
-and CPCL — and generate barcodes, without a printer.
+and CPCL — generate barcodes, and queue print jobs for printers connected
+through the Labelixa agent.
 
 ## Install
 
@@ -41,11 +42,75 @@ that names its target.
 | Label · Detect Language | which printer language raw code is, with a confidence tier | JSON |
 | Label · Check Printer Compatibility | risk against a printer model, e.g. `zebra/zd421` (a risk report, not an emulator) | JSON |
 | Barcode · Generate | a standalone barcode or QR code as SVG or PNG | binary file |
+| Print Job · Print Label | queues raw label code for a device or a printer group (`POST /v1/print`), with an Idempotency-Key | JSON (`job_id`, `status`, ...) |
+| Print Job · Get Print Status | where a queued job is now (`GET /v1/print/jobs/{id}`) | JSON |
 
 Every operation maps 1:1 to a documented REST endpoint and there are no
 hidden retries: a retry that swallows a quota answer turns a clear signal
 into a slow mystery. <https://labelixa.com/docs/api> is the source of
 truth.
+
+## Printing
+
+Print Label needs an API key whose plan includes printing, and a printer
+connected through the Labelixa agent. The node queues the job; the agent
+delivers it to the printer.
+
+**Nothing here confirms a printed label.** A raw printer connection
+reports that bytes were accepted, not that paper came out (media out, an
+open head or a jam happen afterwards). The furthest a job gets is
+`dispatched` — the bytes were delivered — and every print item carries
+`print_confirmed: false`.
+
+**Idempotency-Key.** Every Print Label request carries one. When the same
+request arrives again with the same key, the server returns the first
+answer (the item shows `replayed: true`) instead of queuing a second job.
+
+- Default: `n8n-<execution id>-<node id>-<item index>`. n8n's *Retry On
+  Fail* re-runs the node inside the same execution, so a retried item
+  sends the same key and cannot print twice. A new execution (a new
+  trigger, or re-running a failed execution from the list) gets a new key.
+- *Options → Idempotency Key*: your own key, for example
+  `{{ $json.orderId }}-label`, also protects across executions. Up to
+  255 visible ASCII characters. Re-using a key with a different request
+  is refused (HTTP 422); a new job needs a new key.
+
+**Failures say whether a job may exist** (`outcome` on the item with
+*Continue On Fail*):
+
+| Answer | Meaning | `retryable` | `outcome` |
+|---|---|---|---|
+| 402 | printing not on the plan, or the free print allowance is used up — not retried | false | `not_queued` |
+| 400, 401, 403, 404, 422 | permanent: the request, key, plan, device or group needs fixing | false | `not_queued` |
+| 429 | rate limit or full print queue; `retry_after_seconds` from `Retry-After` | true | `not_queued` |
+| 409 | the same key is still being processed; retry after `retry_after_seconds` | true | `unknown` |
+| 5xx, timeout, dropped connection | the job may or may not have been queued | true | `unknown` |
+
+On `unknown` the node does **not** print again and you should not send
+the label as a new job: re-send with the same key (safe — the server
+replays the first answer, which carries the `job_id`), then check it with
+Get Print Status. The item also carries `idempotency_key`. *Options →
+Timeout (Seconds)* sets how long Print Label waits (default 30).
+
+**Get Print Status** returns `status`, a plain `status_meaning`, `final`
+(nothing changes any more: `dispatched`, `failed`, `cancelled`) and
+`needs_attention` (`failed`, `uncertain`):
+
+| `status` | Meaning |
+|---|---|
+| `queued` | accepted and waiting; no agent has taken it yet |
+| `dispatching` | an agent is handing it to the printer |
+| `dispatched` | the bytes were delivered to the printer — not a print confirmation |
+| `failed` | delivery failed; check `stage` and `copies_sent` first, since re-sending a partly delivered job prints those copies twice |
+| `cancelled` | cancelled, will not be delivered |
+| `uncertain` | the job reached the agent but no result came back; whether anything reached the printer is not known. Never retried automatically; `warning_code` is `delivery_uncertain`. Check the printer, and if the label is missing print it as a new job with a new key |
+
+Other fields: `stage`, `copies`, `copies_sent`, `reached_printer`, an
+English `stage_summary`, `error_type` (the API's error code, passed on as
+sent), `device_id`, `device`, `charged`, `agent_last_seen`, and
+`printer_status` (`health`: `ready`, `blocked` or `unknown`; `basis`:
+`reported` by the printer or `inferred`; `flags` such as `head_open` or
+`media_out`; `finished_inference`) — `null` when the printer was not asked.
 
 Binary files are named `label-<item>.<ext>` (Render) and
 `barcode-<item>.<ext>` (Barcode · Generate), where `<item>` is the
@@ -79,6 +144,9 @@ Versions up to 0.1.3 returned the API's own names and values (for example
 needs the new name or value.
 
 ## Errors worth knowing
+
+Print Label has its own rules (see [Printing](#printing)); for the other
+operations:
 
 - **Quota (HTTP 402 / 429)** — the node fails with one sentence that
   carries the server's `Retry-After` and its hint (`upgrade`, `addon`),

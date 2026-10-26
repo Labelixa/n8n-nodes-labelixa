@@ -21,14 +21,15 @@ const contract = require(join(root, "dist/nodes/Labelixa/contract.js"));
 const ZPL = "^XA^FO50,50^ADN,36,20^FDHello^FS^XZ";
 
 /** A fake IExecuteFunctions: parameters in, recorded requests out. */
-function context({ params, items = [{ json: {} }], apiKey = "lbx_test", baseUrl = "https://api.labelixa.com", answer, continueOnFail = false }) {
+function context({ params, items = [{ json: {} }], apiKey = "lbx_test", baseUrl = "https://api.labelixa.com", answer, continueOnFail = false, executionId = "1042", nodeId = "node-7f3a" }) {
   const calls = [];
   const ctx = {
     calls,
     getInputData: () => items,
     getNodeParameter: (name, _i, fallback) => (name in params ? params[name] : fallback),
     getCredentials: async () => ({ apiKey, baseUrl }),
-    getNode: () => ({ name: "Labelixa", type: "labelixa" }),
+    getNode: () => ({ name: "Labelixa", type: "labelixa", id: nodeId }),
+    getExecutionId: () => executionId,
     continueOnFail: () => continueOnFail,
     helpers: {
       // n8n applies the credential's `authenticate` to the request, then
@@ -37,7 +38,8 @@ function context({ params, items = [{ json: {} }], apiKey = "lbx_test", baseUrl 
         assert.equal(credentialType, "labelixaApi");
         const authed = await new LabelixaApi().authenticate({ apiKey, baseUrl }, options);
         calls.push(authed);
-        const a = typeof answer === "function" ? answer(authed) : answer;
+        const a = typeof answer === "function" ? answer(authed, calls.length - 1) : answer;
+        if (a instanceof Error) throw a;
         return { statusCode: 200, body: "OK", headers: {}, ...a };
       },
       prepareBinaryData: async (buffer, fileName, mimeType) => ({
@@ -617,4 +619,331 @@ test("enum values: only the listed fields; free text, rule codes and other field
   assert.deepEqual(out.preview_coverage, { supported: ["A"], unknown: ["ZZ"] });
   // Inherited names are neither fields nor values.
   assert.equal(englishFields({ risk: { seviye: "toString" } }).risk.level, "toString");
+});
+
+// ---- Print Job: Print Label + Get Print Status ------------------------------
+// Answer fixtures follow the server's POST /v1/print (202) and
+// GET /v1/print/jobs/{id} bodies field by field.
+
+const printer = require(join(root, "dist/nodes/Labelixa/print.js"));
+
+const PRINT = { resource: "print", operation: "printLabel", printTarget: "device", deviceId: "dev_1", printCode: ZPL, copies: 2 };
+
+const PRINT_ANSWER = {
+  job_id: "9f2c", status: "queued", etiket: 2, ucretlendi: true, dil: "zpl", uyari: "",
+  sablon_id: "", cihaz_eslenmis: null, device_id: "dev_1", printer_group: "",
+  basim_onaylandi: false, agent_son_gorulme: 1761480000.5, agent_son_gorulme_sn_once: 3.2,
+  not: "Job queued. It stays 'queued' until an agent that forwards it to the printer is installed; this response is NOT A PRINT CONFIRMATION.",
+};
+
+const STATUS_ANSWER = {
+  job_id: "9f2c", device_id: "dev_1", device: "Packing desk", kopya: 2, etiket_sayisi: 1,
+  kaynak_is_id: "", zpl_ozeti: "ab12", ucretlendi: true, created_at: 1761480000.1,
+  status: "dispatched", hata_tipi: "", asama: "submitted_to_printer", gonderilen_kopya: 2,
+  yaziciya_giden_var_mi: true, asama_ozeti: "Baytlar yaziciya teslim edildi", yazici_durumu: null,
+  basim_onaylandi: false, uyari_kodu: null, uyari: null,
+  agent_son_gorulme: 1761480000.5, agent_son_gorulme_sn_once: 3.2,
+};
+
+const accepted = (extra = {}) => ({ statusCode: 202, body: PRINT_ANSWER, headers: {}, ...extra });
+
+test("Print Label: POST /v1/print with JSON, an explicit Accept and the derived key", async () => {
+  const { ctx } = await run({ params: PRINT, answer: accepted() });
+  assert.equal(ctx.calls.length, 1);
+  const req = ctx.calls[0];
+  assert.equal(req.method, "POST");
+  assert.equal(req.url, "https://api.labelixa.com/v1/print");
+  // n8n's helper would otherwise pick the Accept header; name it.
+  assert.equal(req.headers.Accept, "application/json");
+  assert.equal(req.headers["Content-Type"], "application/json");
+  assert.equal(req.headers["Idempotency-Key"], "n8n-1042-node-7f3a-0");
+  assert.equal(req.headers["X-API-Key"], "lbx_test");
+  assert.match(req.headers["X-Client"], /^n8n-nodes-labelixa\/0\.2\.0$/);
+  // The payload goes as `yuk`, never also as the old `zpl` alias; no `dil`
+  // means the device's own language.
+  assert.deepEqual(req.body, { device_id: "dev_1", yuk: ZPL, kopya: 2, etiket_sayisi: 1 });
+  assert.equal(req.encoding, "json");
+  assert.equal(req.timeout, 30000);
+  assert.equal(req.disableFollowRedirect, true);
+  assert.equal(req.ignoreHttpStatusErrors, true);
+});
+
+test("Print Label: a printer group and the options reach the body", async () => {
+  const { ctx } = await run({
+    params: {
+      ...PRINT, printTarget: "group", deviceId: "ignored", printerGroup: " warehouse-a ",
+      printOptions: { language: "tspl", labelCount: 3, sourceJobId: "r_77", timeout: 5 },
+    },
+    answer: accepted(),
+  });
+  assert.deepEqual(ctx.calls[0].body, { printer_group: "warehouse-a", yuk: ZPL, kopya: 2, etiket_sayisi: 3, dil: "tspl", kaynak_is_id: "r_77" });
+  assert.equal(ctx.calls[0].timeout, 5000);
+});
+
+test("Print Label: the output is English and never claims a printed label", async () => {
+  const { items } = await run({ params: PRINT, answer: accepted() });
+  assert.deepEqual(items[0].json, {
+    job_id: "9f2c", status: "queued", label_count: 2, charged: true, language: "zpl", warning: "",
+    template_id: "", device_mapped: null, device_id: "dev_1", printer_group: "",
+    print_confirmed: false, agent_last_seen: 1761480000.5, agent_last_seen_seconds_ago: 3.2,
+    note: PRINT_ANSWER.not, idempotency_key: "n8n-1042-node-7f3a-0", replayed: false,
+  });
+  // Even a body that said otherwise would not turn into a confirmation.
+  const odd = await run({ params: PRINT, answer: accepted({ body: { ...PRINT_ANSWER, basim_onaylandi: true } }) });
+  assert.equal(odd.items[0].json.print_confirmed, false);
+});
+
+test("Print Label: a replayed answer is marked, and 200 is accepted as well as 202", async () => {
+  const { items } = await run({ params: PRINT, answer: { statusCode: 202, body: JSON.stringify(PRINT_ANSWER), headers: { "idempotency-replayed": "true" } } });
+  assert.equal(items[0].json.replayed, true);
+  assert.equal(items[0].json.job_id, "9f2c");
+  const ok = await run({ params: PRINT, answer: { statusCode: 200, body: PRINT_ANSWER } });
+  assert.equal(ok.items[0].json.job_id, "9f2c");
+});
+
+test("Idempotency-Key: one per item, the same on a retry, new for a new execution", async () => {
+  const three = [{ json: {} }, { json: {} }, { json: {} }];
+  const a = await run({ params: PRINT, items: three, answer: accepted() });
+  const keys = a.ctx.calls.map((c) => c.headers["Idempotency-Key"]);
+  assert.deepEqual(keys, ["n8n-1042-node-7f3a-0", "n8n-1042-node-7f3a-1", "n8n-1042-node-7f3a-2"]);
+  // n8n's Retry On Fail re-runs the node in the same execution.
+  const retry = await run({ params: PRINT, items: three, answer: accepted() });
+  assert.deepEqual(retry.ctx.calls.map((c) => c.headers["Idempotency-Key"]), keys);
+  const next = await run({ params: PRINT, answer: accepted(), executionId: "1043" });
+  assert.equal(next.ctx.calls[0].headers["Idempotency-Key"], "n8n-1043-node-7f3a-0");
+  // Two print nodes in one workflow do not share keys.
+  const other = await run({ params: PRINT, answer: accepted(), nodeId: "node-b" });
+  assert.equal(other.ctx.calls[0].headers["Idempotency-Key"], "n8n-1042-node-b-0");
+});
+
+test("Idempotency-Key: a user key wins; an unusable one stops before any request", async () => {
+  const { ctx, items } = await run({ params: { ...PRINT, printOptions: { idempotencyKey: "  order-5512-label  " } }, answer: accepted() });
+  assert.equal(ctx.calls[0].headers["Idempotency-Key"], "order-5512-label");
+  assert.equal(items[0].json.idempotency_key, "order-5512-label");
+  for (const bad of ["order 5512", "x".repeat(256), "sipariş"]) {
+    const c = context({ params: { ...PRINT, printOptions: { idempotencyKey: bad } }, answer: accepted() });
+    await assert.rejects(new Labelixa().execute.call(c), /Idempotency-Key/, bad);
+    assert.equal(c.calls.length, 0, bad);
+  }
+  assert.equal(printer.idempotencyKey("", "9", "n", 4), "n8n-9-n-4");
+  assert.throws(() => printer.idempotencyKey("", undefined, "n", 0), /Idempotency Key option/);
+});
+
+test("Print Label: invalid input is refused before any request", async () => {
+  for (const params of [
+    { ...PRINT, deviceId: "  " },
+    { ...PRINT, printTarget: "group", printerGroup: "" },
+    { ...PRINT, printCode: "" },
+    { ...PRINT, copies: 0 },
+    { ...PRINT, copies: 1.5 },
+    { ...PRINT, printOptions: { labelCount: 0 } },
+  ]) {
+    const c = context({ params, answer: accepted() });
+    await assert.rejects(new Labelixa().execute.call(c), undefined, JSON.stringify(params));
+    assert.equal(c.calls.length, 0, JSON.stringify(params));
+  }
+});
+
+/** Runs Print Label with Continue On Fail and returns the one item. */
+async function failed(answer, params = PRINT) {
+  const { ctx, items } = await run({ params, answer, continueOnFail: true });
+  assert.equal(ctx.calls.length, 1, "the node never sends a second request by itself");
+  return items[0].json;
+}
+
+test("402: a plan or allowance answer, no retry, nothing queued", async () => {
+  const j = await failed({ statusCode: 402, body: { hata: "Free print trial used up", hata_tipi: "DenemeDoldu" }, headers: { "x-quota-action": "upgrade" } });
+  assert.match(j.error, /HTTP 402/);
+  assert.match(j.error, /Free print trial used up/);
+  assert.match(j.error, /does not retry/);
+  assert.match(j.error, /upgrade/);
+  assert.doesNotMatch(j.error, /hata/);
+  assert.equal(j.retryable, false);
+  assert.equal(j.outcome, "not_queued");
+  assert.equal(j.http_status, 402);
+  assert.equal(j.print_confirmed, false);
+  await assert.rejects(run({ params: PRINT, answer: { statusCode: 402, body: { hata: "x" } } }), /HTTP 402/);
+});
+
+test("429: Retry-After is surfaced in the message and as a number", async () => {
+  const j = await failed({ statusCode: 429, body: { hata: "Pending print job limit reached (500)." }, headers: { "Retry-After": "17" } });
+  assert.match(j.error, /HTTP 429/);
+  assert.match(j.error, /Retry after 17 s/);
+  assert.match(j.error, /same Idempotency-Key \(n8n-1042-node-7f3a-0\) is safe/);
+  assert.equal(j.retry_after_seconds, 17);
+  assert.equal(j.retryable, true);
+  assert.equal(j.outcome, "not_queued");
+  const noHeader = await failed({ statusCode: 429, body: "slow down", headers: {} });
+  assert.equal(noHeader.retry_after_seconds, 60);
+  // An HTTP date also works.
+  assert.equal(printer.retryAfterSeconds({ "retry-after": new Date(Date.UTC(2026, 0, 1, 0, 0, 30)).toUTCString() }, Date.UTC(2026, 0, 1)), 30);
+});
+
+test("other 4xx answers are permanent: no retry, the server's sentence, what to fix", async () => {
+  const bad = await failed({ statusCode: 400, body: { hata: "'device_id' or 'printer_group' is required" } });
+  assert.equal(bad.error, "Labelixa rejected the print request (HTTP 400): 'device_id' or 'printer_group' is required. Fix the request; no job was queued");
+  assert.equal(bad.retryable, false);
+  const reuse = await failed({ statusCode: 422, body: { hata: "Same Idempotency-Key but a different request" } });
+  assert.match(reuse.error, /a new job needs a new key/);
+  assert.equal(reuse.retryable, false);
+  for (const status of [401, 403, 404]) {
+    const j = await failed({ statusCode: status, body: { hata: "Not found" } });
+    assert.equal(j.retryable, false, String(status));
+    assert.equal(j.outcome, "not_queued", String(status));
+  }
+  const busy = await failed({ statusCode: 409, body: { hata: "still being processed" }, headers: { "retry-after": "2" } });
+  assert.equal(busy.retryable, true);
+  assert.equal(busy.retry_after_seconds, 2);
+  assert.match(busy.error, /do not send it as a new job/);
+});
+
+test("a timeout is never a reprint: one request, and the advice is the same key", async () => {
+  const timeout = Object.assign(new Error("timeout of 30000ms exceeded"), { code: "ECONNABORTED" });
+  const j = await failed(timeout);
+  assert.match(j.error, /^No answer from Labelixa within 30 s/);
+  assert.match(j.error, /may or may not have been queued, so do not send it as a new job/);
+  assert.match(j.error, /same Idempotency-Key \(n8n-1042-node-7f3a-0\) is safe/);
+  assert.match(j.error, /Get Print Status/);
+  assert.equal(j.outcome, "unknown");
+  assert.equal(j.http_status, null);
+  assert.equal(j.idempotency_key, "n8n-1042-node-7f3a-0");
+  const custom = await failed(Object.assign(new Error("socket timeout"), { code: "ETIMEDOUT" }), { ...PRINT, printOptions: { timeout: 5 } });
+  assert.match(custom.error, /within 5 s/);
+  const reset = await failed(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
+  assert.match(reset.error, /^The connection to Labelixa failed \(socket hang up\)/);
+  assert.equal(reset.outcome, "unknown");
+  // Without Continue On Fail it is an n8n error with the same sentence.
+  await assert.rejects(run({ params: PRINT, answer: timeout }), /No answer from Labelixa within 30 s/);
+});
+
+test("5xx and an unreadable 202 leave the outcome unknown, never 'failed'", async () => {
+  const gw = await failed({ statusCode: 502, body: "<html>Bad gateway</html>" });
+  assert.equal(gw.outcome, "unknown");
+  assert.match(gw.error, /Whether the job was queued is not known/);
+  const lost = await failed({ statusCode: 202, body: "<html>" });
+  assert.equal(lost.outcome, "unknown");
+  assert.match(lost.error, /accepted the print request \(HTTP 202\) but its answer could not be read/);
+});
+
+test("Get Print Status: GET /v1/print/jobs/{id}, JSON Accept, no key, no body", async () => {
+  const { ctx, items } = await run({
+    params: { resource: "print", operation: "getStatus", jobId: " 9f2c/x " },
+    answer: { statusCode: 200, body: STATUS_ANSWER },
+  });
+  const req = ctx.calls[0];
+  assert.equal(req.method, "GET");
+  assert.equal(req.url, "https://api.labelixa.com/v1/print/jobs/9f2c%2Fx");
+  assert.equal(req.headers.Accept, "application/json");
+  assert.equal("Idempotency-Key" in req.headers, false);
+  assert.equal(req.body, undefined);
+  assert.deepEqual(items[0].json, {
+    job_id: "9f2c", device_id: "dev_1", device: "Packing desk", copies: 2, labels_per_copy: 1,
+    source_job_id: "", payload_hash: "ab12", charged: true, created_at: 1761480000.1,
+    status: "dispatched", error_type: "", stage: "submitted_to_printer", copies_sent: 2,
+    reached_printer: true, print_confirmed: false, warning_code: null, warning: null,
+    agent_last_seen: 1761480000.5, agent_last_seen_seconds_ago: 3.2,
+    stage_summary: "The bytes were handed to the printer. This is not a print confirmation.",
+    printer_status: null,
+    status_meaning: "The bytes were delivered to the printer. This does not confirm that a label physically printed.",
+    final: true, needs_attention: false,
+  });
+});
+
+test("Get Print Status: every status has a meaning and none claims a printed label", async () => {
+  const expected = {
+    queued: [false, false], dispatching: [false, false], dispatched: [true, false],
+    failed: [true, true], cancelled: [true, false], uncertain: [false, true],
+  };
+  for (const [status, [final, attention]] of Object.entries(expected)) {
+    const { items } = await run({
+      params: { resource: "print", operation: "getStatus", jobId: "9f2c" },
+      answer: { statusCode: 200, body: { ...STATUS_ANSWER, status, basim_onaylandi: true } },
+    });
+    const j = items[0].json;
+    assert.equal(j.status, status);
+    assert.equal(j.final, final, status);
+    assert.equal(j.needs_attention, attention, status);
+    assert.equal(j.print_confirmed, false, status);
+    assert.ok(j.status_meaning.length > 20, status);
+    assert.doesNotMatch(j.status_meaning, /printed successfully|was printed|has printed/i, status);
+  }
+  const unknown = await run({
+    params: { resource: "print", operation: "getStatus", jobId: "9f2c" },
+    answer: { statusCode: 200, body: { ...STATUS_ANSWER, status: "parked" } },
+  });
+  assert.match(unknown.items[0].json.status_meaning, /not known to this node version/);
+});
+
+test("Get Print Status: an uncertain job carries delivery_uncertain and its warning", async () => {
+  const warning = "Delivery uncertain: the job reached the agent but no result came back, so the label may or may not have been printed. Check the printer before reprinting; a reprint is a new job.";
+  const { items } = await run({
+    params: { resource: "print", operation: "getStatus", jobId: "9f2c" },
+    answer: { statusCode: 200, body: { ...STATUS_ANSWER, status: "uncertain", asama: "", gonderilen_kopya: -1, yaziciya_giden_var_mi: false, hata_tipi: "TeslimBelirsiz", uyari_kodu: "delivery_uncertain", uyari: warning, asama_ozeti: "Is agent'a verildi ama sonucu gelmedi" } },
+  });
+  const j = items[0].json;
+  assert.equal(j.warning_code, "delivery_uncertain");
+  assert.equal(j.warning, warning);
+  assert.equal(j.error_type, "TeslimBelirsiz");
+  assert.match(j.stage_summary, /no result came back; whether anything reached the printer is not known/);
+  assert.match(j.status_meaning, /never retried automatically/);
+  assert.match(j.status_meaning, /new Idempotency-Key/);
+  assert.equal("asama_ozeti" in j, false);
+});
+
+test("Get Print Status: stage summaries, partial delivery included", () => {
+  assert.equal(printer.stageSummary("failed", "delivered_to_agent", -1, 2), "No bytes were sent to the printer.");
+  assert.equal(printer.stageSummary("queued", "queued", -1, 1), "No bytes were sent to the printer.");
+  assert.match(printer.stageSummary("failed", "submitted_to_printer", 1, 3), /^1 of 3 copies were handed to the printer; re-sending the job as it is prints those copies a second time\.$/);
+  assert.match(printer.stageSummary("dispatched", "submitted_to_os", 2, 2), /operating system print queue\. This is not a print confirmation\.$/);
+  assert.match(printer.stageSummary("failed", "", -1, 1), /did not report a stage/);
+});
+
+test("Get Print Status: the printer's own report is English, its free text is dropped", async () => {
+  const { items } = await run({
+    params: { resource: "print", operation: "getStatus", jobId: "9f2c" },
+    answer: { statusCode: 200, body: { ...STATUS_ANSWER, yazici_durumu: {
+      saglik: "engel", etiket: "KANIT", gerekce: "yazici bildirdi: kafa_acik", bitti_cikarimi: null,
+      bayraklar: ["kafa_acik", "kagit_bitti", "yeni_bayrak"], deneme: 1,
+    } } },
+  });
+  assert.deepEqual(items[0].json.printer_status, {
+    health: "blocked", basis: "reported", flags: ["head_open", "media_out", "yeni_bayrak"], attempt: 1, finished_inference: null,
+  });
+  const ready = contract.englishPrinterStatus({ saglik: "hazir", etiket: "KANIT", bayraklar: [], deneme: null,
+    bitti_cikarimi: { deger: true, etiket: "CIKARIM", gerekce: "tampon=0" } });
+  assert.deepEqual(ready, { health: "ready", basis: "reported", flags: [], attempt: null, finished_inference: { value: true, basis: "inferred" } });
+});
+
+test("Get Print Status: 404 and quota answers are clear errors", async () => {
+  const { items } = await run({
+    params: { resource: "print", operation: "getStatus", jobId: "nope" },
+    answer: { statusCode: 404, body: { hata: "Not found" } },
+    continueOnFail: true,
+  });
+  assert.equal(items[0].json.error, "Labelixa answered HTTP 404: Not found. The job does not exist or belongs to another account");
+  assert.equal(items[0].json.retryable, false);
+  const limited = await run({
+    params: { resource: "print", operation: "getStatus", jobId: "9f2c" },
+    answer: { statusCode: 429, body: { hata: "Rate limit" }, headers: { "retry-after": "4" } },
+    continueOnFail: true,
+  });
+  assert.match(limited.items[0].json.error, /Retry after 4 s/);
+  assert.equal(limited.items[0].json.retry_after_seconds, 4);
+  await assert.rejects(run({ params: { resource: "print", operation: "getStatus", jobId: "" } }), /Job ID is required/);
+});
+
+test("print field names: English, snake case, the same words the other answers use", () => {
+  const { PRINT_FIELD_NAMES, FIELD_NAMES } = contract;
+  for (const v of Object.values(PRINT_FIELD_NAMES)) assert.match(v, /^[a-z][a-z_]*$/);
+  for (const [wire, en] of Object.entries(PRINT_FIELD_NAMES)) {
+    if (wire in FIELD_NAMES) assert.equal(FIELD_NAMES[wire], en, wire);
+  }
+});
+
+test("the node lists the print operations under their own resource", () => {
+  const props = new Labelixa().description.properties;
+  const resource = props.find((p) => p.name === "resource");
+  assert.ok(resource.options.some((o) => o.value === "print"));
+  const ops = props.find((p) => p.name === "operation" && p.displayOptions.show.resource[0] === "print");
+  assert.deepEqual(ops.options.map((o) => o.value), ["getStatus", "printLabel"]);
 });

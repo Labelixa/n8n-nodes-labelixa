@@ -9,8 +9,29 @@ import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
 import { englishFields } from './contract';
 import { capMessage, checkBaseUrl, describeFailure, planRequest, type Language, type Params } from './plan';
+import {
+	describePrintFailure,
+	describeStatusFailure,
+	describeTransportFailure,
+	describeUnreadableAcceptance,
+	failureJson,
+	idempotencyKey,
+	planPrint,
+	planPrintStatus,
+	printOutput,
+	statusOutput,
+	type FailureInfo,
+	type JsonRequest,
+	type PrintParams,
+} from './print';
 
-const VERSION = '0.1.4';
+/** Where a print failure keeps its structured fields on the n8n error. */
+const PRINT_FAILURE = 'printFailure';
+
+const VERSION = '0.2.0';
+
+/** Print requests wait this long for an answer unless the user sets another. */
+const DEFAULT_TIMEOUT_SECONDS = 30;
 
 const showFor = (operations: string[], resource = 'label') => ({
 	show: { resource: [resource], operation: operations },
@@ -56,7 +77,7 @@ export class Labelixa implements INodeType {
 		version: 1,
 		subtitle: '={{ $parameter["operation"] + ": " + $parameter["resource"] }}',
 		description:
-			'Render, validate and convert ZPL, EPL, TSPL and CPCL label code, and generate barcodes, without a printer',
+			'Render, validate and convert ZPL, EPL, TSPL and CPCL label code, generate barcodes, and queue print jobs',
 		defaults: { name: 'Labelixa' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
@@ -71,6 +92,7 @@ export class Labelixa implements INodeType {
 				options: [
 					{ name: 'Label', value: 'label' },
 					{ name: 'Barcode', value: 'barcode' },
+					{ name: 'Print Job', value: 'print' },
 				],
 				default: 'label',
 			},
@@ -129,6 +151,30 @@ export class Labelixa implements INodeType {
 					},
 				],
 				default: 'barcode',
+			},
+			{
+				displayName: 'Operation',
+				name: 'operation',
+				type: 'options',
+				noDataExpression: true,
+				displayOptions: { show: { resource: ['print'] } },
+				options: [
+					{
+						name: 'Get Print Status',
+						value: 'getStatus',
+						action: 'Get the status of a print job',
+						description:
+							'Where a queued job is now (queued, dispatching, dispatched, failed, cancelled, uncertain); never a print confirmation',
+					},
+					{
+						name: 'Print Label',
+						value: 'printLabel',
+						action: 'Send label code to a printer',
+						description:
+							'Queues raw label code for a printer or printer group, with an Idempotency-Key so a retry cannot print twice',
+					},
+				],
+				default: 'printLabel',
 			},
 
 			// ---- label: shared -------------------------------------------------
@@ -270,6 +316,127 @@ export class Labelixa implements INodeType {
 				description: 'Name of the binary field to hold the barcode file',
 				displayOptions: showFor(['barcode'], 'barcode'),
 			},
+
+			// ---- print job -------------------------------------------------------
+			{
+				displayName: 'Send To',
+				name: 'printTarget',
+				type: 'options',
+				options: [
+					{ name: 'Device', value: 'device', description: 'One printer, by its Labelixa device ID' },
+					{
+						name: 'Printer Group',
+						value: 'group',
+						description: 'A group name; the server picks the device and returns its ID',
+					},
+				],
+				default: 'device',
+				displayOptions: showFor(['printLabel'], 'print'),
+			},
+			{
+				displayName: 'Device ID',
+				name: 'deviceId',
+				type: 'string',
+				default: '',
+				required: true,
+				description: 'The printer\'s device ID from the Labelixa panel',
+				displayOptions: { show: { resource: ['print'], operation: ['printLabel'], printTarget: ['device'] } },
+			},
+			{
+				displayName: 'Printer Group',
+				name: 'printerGroup',
+				type: 'string',
+				default: '',
+				required: true,
+				placeholder: 'warehouse-a',
+				displayOptions: { show: { resource: ['print'], operation: ['printLabel'], printTarget: ['group'] } },
+			},
+			{
+				displayName: 'Label Code',
+				name: 'printCode',
+				type: 'string',
+				typeOptions: { rows: 6 },
+				default: '',
+				required: true,
+				placeholder: '^XA^FO50,50^A0N,40,40^FDHello^FS^XZ',
+				description: 'The raw label code, sent to the printer as it is (ZPL, EPL, TSPL, CPCL or raw bytes)',
+				displayOptions: showFor(['printLabel'], 'print'),
+			},
+			{
+				displayName: 'Copies',
+				name: 'copies',
+				type: 'number',
+				typeOptions: { minValue: 1 },
+				default: 1,
+				displayOptions: showFor(['printLabel'], 'print'),
+			},
+			{
+				displayName: 'Options',
+				name: 'printOptions',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				displayOptions: showFor(['printLabel'], 'print'),
+				options: [
+					{
+						displayName: 'Idempotency Key',
+						name: 'idempotencyKey',
+						type: 'string',
+						default: '',
+						description:
+							'Leave empty to derive one from the execution, the node and the item, so a retry of the same item cannot print twice. Set your own (for example an order number) to also protect across executions.',
+					},
+					{
+						displayName: 'Labels in Payload',
+						name: 'labelCount',
+						type: 'number',
+						typeOptions: { minValue: 1 },
+						default: 1,
+						description: 'How many labels the code contains; with Copies it gives the label count',
+					},
+					{
+						displayName: 'Language',
+						name: 'language',
+						type: 'options',
+						options: [
+							{ name: 'CPCL', value: 'cpcl' },
+							{ name: 'Device Default', value: '' },
+							{ name: 'EPL', value: 'epl' },
+							{ name: 'Raw', value: 'raw' },
+							{ name: 'TSPL', value: 'tspl' },
+							{ name: 'ZPL', value: 'zpl' },
+						],
+						default: '',
+						description: 'How the printer should read the code; the device\'s own language when left at the default',
+					},
+					{
+						displayName: 'Source Render Job ID',
+						name: 'sourceJobId',
+						type: 'string',
+						default: '',
+						description: 'The job that rendered this label, if any; see the API reference for how it is billed',
+					},
+					{
+						displayName: 'Timeout (Seconds)',
+						name: 'timeout',
+						type: 'number',
+						typeOptions: { minValue: 1 },
+						default: DEFAULT_TIMEOUT_SECONDS,
+						description:
+							'How long to wait for an answer. On a timeout the node does not print again; it tells you to re-send with the same key.',
+					},
+				],
+			},
+			{
+				displayName: 'Job ID',
+				name: 'jobId',
+				type: 'string',
+				default: '',
+				required: true,
+				placeholder: '={{ $json.job_id }}',
+				description: 'The job_id that Print Label returned',
+				displayOptions: showFor(['getStatus'], 'print'),
+			},
 		],
 	};
 
@@ -290,6 +457,10 @@ export class Labelixa implements INodeType {
 
 		for (let i = 0; i < items.length; i++) {
 			try {
+				if (this.getNodeParameter('resource', i) === 'print') {
+					out.push(await runPrintJob(this, i, baseUrl));
+					continue;
+				}
 				const params = readParams(this, i);
 				const plan = planRequest(params);
 				const headers: Record<string, string> = {
@@ -397,7 +568,12 @@ export class Labelixa implements INodeType {
 			} catch (error) {
 				if (this.continueOnFail()) {
 					out.push({
-						json: { error: error instanceof Error ? error.message : String(error) },
+						// A print failure carries more than its sentence: whether
+						// a job may exist, the key to re-send with, how long to wait.
+						json:
+							error instanceof NodeOperationError && error.context?.[PRINT_FAILURE]
+								? (error.context[PRINT_FAILURE] as IDataObject)
+								: { error: error instanceof Error ? error.message : String(error) },
 						pairedItem: { item: i },
 					});
 					continue;
@@ -410,6 +586,119 @@ export class Labelixa implements INodeType {
 		}
 		return [out];
 	}
+}
+
+type FullResponse = {
+	statusCode: number;
+	body: unknown;
+	headers: Record<string, string | string[] | undefined>;
+};
+
+async function sendJson(
+	ctx: IExecuteFunctions,
+	baseUrl: string,
+	req: JsonRequest,
+	timeoutSeconds: number,
+): Promise<FullResponse> {
+	return (await ctx.helpers.httpRequestWithAuthentication.call(ctx, 'labelixaApi', {
+		method: req.method,
+		url: baseUrl + req.path,
+		headers: { ...req.headers, 'X-Client': `n8n-nodes-labelixa/${VERSION}` },
+		body: req.body,
+		encoding: 'json',
+		returnFullResponse: true,
+		ignoreHttpStatusErrors: true,
+		// Same reason as the other operations: a redirect would carry the key.
+		disableFollowRedirect: true,
+		timeout: timeoutSeconds * 1000,
+	})) as FullResponse;
+}
+
+/** The parsed JSON object of an answer, or null when it is not one. */
+function jsonObject(body: unknown): Record<string, unknown> | null {
+	let parsed: unknown = body;
+	if (typeof body === 'string') {
+		try {
+			parsed = JSON.parse(body);
+		} catch {
+			return null;
+		}
+	}
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		return null;
+	}
+	return parsed as Record<string, unknown>;
+}
+
+/**
+ * A print failure as an n8n error. The structured fields ride along in the
+ * error's context so Continue On Fail can put them on the item.
+ */
+function printError(ctx: IExecuteFunctions, info: FailureInfo, i: number): NodeOperationError {
+	const error = new NodeOperationError(ctx.getNode(), info.message, { itemIndex: i });
+	error.context[PRINT_FAILURE] = failureJson(info) as IDataObject;
+	return error;
+}
+
+/** Print Label and Get Print Status for one item. Never retries by itself. */
+async function runPrintJob(ctx: IExecuteFunctions, i: number, baseUrl: string): Promise<INodeExecutionData> {
+	const operation = ctx.getNodeParameter('operation', i) as string;
+	if (operation === 'getStatus') {
+		const req = planPrintStatus(ctx.getNodeParameter('jobId', i) as string);
+		const response = await sendJson(ctx, baseUrl, req, DEFAULT_TIMEOUT_SECONDS);
+		if (response.statusCode !== 200) {
+			throw printError(ctx, describeStatusFailure(response.statusCode, response.body, response.headers), i);
+		}
+		const body = jsonObject(response.body);
+		if (!body) {
+			throw new NodeOperationError(
+				ctx.getNode(),
+				`Expected a JSON object from the API but got: ${capMessage(response.body)}`,
+				{ itemIndex: i },
+			);
+		}
+		return { json: statusOutput(body) as IDataObject, pairedItem: { item: i } };
+	}
+	if (operation !== 'printLabel') {
+		throw new NodeOperationError(ctx.getNode(), `Unknown operation "${operation}"`, { itemIndex: i });
+	}
+	const options = ctx.getNodeParameter('printOptions', i, {}) as IDataObject;
+	const params: PrintParams = {
+		target: ctx.getNodeParameter('printTarget', i, 'device') === 'group' ? 'group' : 'device',
+		deviceId: String(ctx.getNodeParameter('deviceId', i, '') ?? ''),
+		printerGroup: String(ctx.getNodeParameter('printerGroup', i, '') ?? ''),
+		content: String(ctx.getNodeParameter('printCode', i) ?? ''),
+		copies: Number(ctx.getNodeParameter('copies', i, 1)),
+		language: String(options.language ?? ''),
+		labelCount: Number(options.labelCount ?? 1),
+		sourceJobId: String(options.sourceJobId ?? ''),
+	};
+	const node = ctx.getNode();
+	const key = idempotencyKey(
+		String(options.idempotencyKey ?? ''),
+		ctx.getExecutionId(),
+		node.id || node.name,
+		i,
+	);
+	const timeoutSeconds = Number(options.timeout ?? DEFAULT_TIMEOUT_SECONDS) || DEFAULT_TIMEOUT_SECONDS;
+	const req = planPrint(params, key);
+	let response: FullResponse;
+	try {
+		response = await sendJson(ctx, baseUrl, req, timeoutSeconds);
+	} catch (error) {
+		// No HTTP answer: a job may exist. Report, never re-send.
+		throw printError(ctx, describeTransportFailure(error, key, timeoutSeconds), i);
+	}
+	if (response.statusCode !== 202 && response.statusCode !== 200) {
+		throw printError(ctx, describePrintFailure(response.statusCode, response.body, response.headers, key), i);
+	}
+	const body = jsonObject(response.body);
+	if (!body) {
+		throw printError(ctx, describeUnreadableAcceptance(response.statusCode, response.body, key), i);
+	}
+	const replayed =
+		String(response.headers['idempotency-replayed'] ?? response.headers['Idempotency-Replayed'] ?? '') === 'true';
+	return { json: printOutput(body, key, replayed) as IDataObject, pairedItem: { item: i } };
 }
 
 function readParams(ctx: IExecuteFunctions, i: number): Params {
